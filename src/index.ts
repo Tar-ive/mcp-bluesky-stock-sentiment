@@ -1,28 +1,24 @@
 import { Hono } from "hono";
 import { McpServer, StreamableHttpTransport } from "mcp-lite";
 import { z } from "zod";
+import { registerStockTools } from "./mcp/tools";
+
+interface Env {
+  AI: Ai;
+}
 
 const mcp = new McpServer({
-  name: "starter-mcp-lite-server",
+  name: "bluesky-stock-sentiment",
   version: "1.0.0",
   schemaAdapter: (schema) => z.toJSONSchema(schema as z.ZodType),
 });
 
-mcp.tool("sum", {
-  description: "Adds two numbers together",
-  inputSchema: z.object({
-    a: z.number(),
-    b: z.number(),
-  }),
-  handler: (args) => ({
-    content: [{ type: "text", text: String(args.a + args.b) }],
-  }),
-});
+registerStockTools(mcp);
 
 const transport = new StreamableHttpTransport();
 const httpHandler = transport.bind(mcp);
 
-const app = new Hono();
+const app = new Hono<{ Bindings: Env }>();
 
 app.all("/mcp", async (c) => {
   const response = await httpHandler(c.req.raw);
@@ -30,7 +26,20 @@ app.all("/mcp", async (c) => {
 });
 
 app.get("/", (c) => {
-  return c.text("MCP Server - Connect to /mcp");
+  return c.json({
+    name: "Bluesky Stock Sentiment MCP Server",
+    version: "1.0.0",
+    description: "Tap into Bluesky firehose to analyze stock sentiment in real-time",
+    endpoints: {
+      mcp: "/mcp"
+    },
+    tools: [
+      {
+        name: "analyze_stock_posts",
+        description: "Collect and analyze stock-related posts from Bluesky firehose"
+      }
+    ]
+  });
 });
 
 export default app;
