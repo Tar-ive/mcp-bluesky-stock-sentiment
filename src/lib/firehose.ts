@@ -1,3 +1,4 @@
+import * as cbor from "@ipld/dag-cbor";
 import { isStockPost } from "./stock-filter";
 
 export interface StockPost {
@@ -8,8 +9,23 @@ export interface StockPost {
   createdAt: string;
 }
 
+interface FirehoseHeader {
+  op: number;
+  t: string;
+}
+
+interface FirehoseCommit {
+  repo: string;
+  ops: Array<{
+    action: string;
+    path: string;
+    cid?: any;
+  }>;
+  blocks: Uint8Array;
+}
+
 export async function collectStockPosts(
-  count: number = 1,
+  count: number = 2,
   timeoutMs: number = 30000
 ): Promise<StockPost[]> {
   const posts: StockPost[] = [];
@@ -17,6 +33,9 @@ export async function collectStockPosts(
   return new Promise((resolve, reject) => {
     const timeout = setTimeout(() => {
       console.log(`Timeout reached. Collected ${posts.length} posts.`);
+      if (ws.readyState === WebSocket.OPEN) {
+        ws.close();
+      }
       resolve(posts);
     }, timeoutMs);
 
@@ -24,21 +43,28 @@ export async function collectStockPosts(
     
     try {
       ws = new WebSocket("wss://bsky.network/xrpc/com.atproto.sync.subscribeRepos");
+      ws.binaryType = "arraybuffer";
       
       ws.onopen = () => {
         console.log("Connected to Bluesky firehose");
       };
 
-      ws.onmessage = (event) => {
+      ws.onmessage = async (event) => {
         try {
-          if (typeof event.data === 'string') {
-            const data = JSON.parse(event.data);
-            processFirehoseMessage(data, posts, count, ws, timeout, resolve);
-          } else if (event.data instanceof ArrayBuffer) {
-            const decoder = new TextDecoder();
-            const text = decoder.decode(event.data);
-            const data = JSON.parse(text);
-            processFirehoseMessage(data, posts, count, ws, timeout, resolve);
+          if (event.data instanceof ArrayBuffer) {
+            const buffer = new Uint8Array(event.data);
+            
+            // Decode CBOR header
+            const header = cbor.decode(buffer) as FirehoseHeader;
+            
+            if (header.t === "#commit") {
+              // Skip header bytes and decode the commit payload
+              const headerLength = cbor.encode(header).length;
+              const commitData = buffer.slice(headerLength);
+              const commit = cbor.decode(commitData) as FirehoseCommit;
+              
+              await processCommit(commit, posts, count, ws, timeout, resolve);
+            }
           }
         } catch (err) {
           console.error("Error parsing firehose message:", err);
@@ -64,25 +90,27 @@ export async function collectStockPosts(
   });
 }
 
-function processFirehoseMessage(
-  data: any,
+async function processCommit(
+  commit: FirehoseCommit,
   posts: StockPost[],
   count: number,
   ws: WebSocket,
   timeout: NodeJS.Timeout,
   resolve: (value: StockPost[]) => void
 ) {
-  if (data.commit?.ops) {
-    for (const op of data.commit.ops) {
-      if (op.action === "create" && op.path?.includes("app.bsky.feed.post")) {
-        const post = op.record;
+  for (const op of commit.ops) {
+    if (op.action === "create" && op.path.includes("app.bsky.feed.post")) {
+      try {
+        // Decode the CAR blocks to get the post record
+        const blocks = cbor.decode(commit.blocks);
+        const post = blocks[op.cid?.toString()];
         
         if (post?.text && !post.reply && isStockPost(post.text)) {
           const stockPost: StockPost = {
             text: post.text,
-            author: data.repo || "unknown",
-            did: data.repo,
-            uri: `at://${data.repo}/${op.path}`,
+            author: commit.repo,
+            did: commit.repo,
+            uri: `at://${commit.repo}/${op.path}`,
             createdAt: post.createdAt || new Date().toISOString()
           };
           
@@ -93,8 +121,11 @@ function processFirehoseMessage(
             clearTimeout(timeout);
             ws.close();
             resolve(posts);
+            return;
           }
         }
+      } catch (err) {
+        console.error("Error decoding post record:", err);
       }
     }
   }

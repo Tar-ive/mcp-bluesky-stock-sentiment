@@ -1,28 +1,27 @@
 import { McpServer } from "mcp-lite";
 import { z } from "zod";
-import { collectStockPosts } from "../lib/firehose";
+import { searchStockPosts } from "../lib/bluesky-api";
 import { analyzeSentiment } from "../lib/sentiment";
 
 export function registerStockTools(mcp: McpServer) {
   mcp.tool("analyze_stock_posts", {
-    description: "Tap into Bluesky firehose, collect stock-related posts in real-time, and analyze sentiment using Cloudflare AI",
+    description: "Search Bluesky for recent stock-related posts and analyze sentiment using Cloudflare AI",
     inputSchema: z.object({
-      count: z.number().min(1).max(10).default(2).describe("Number of stock posts to collect from the live stream"),
-      timeoutSeconds: z.number().min(5).max(60).default(30).describe("Maximum time (in seconds) to wait for collecting posts"),
+      count: z.number().min(1).max(10).default(2).describe("Number of recent stock posts to analyze"),
     }),
     handler: async (args, ctx) => {
-      const { count, timeoutSeconds } = args;
+      const { count } = args;
       
-      console.log(`Starting firehose collection: ${count} posts, ${timeoutSeconds}s timeout`);
+      console.log(`Searching for ${count} recent stock posts...`);
       
       try {
-        const posts = await collectStockPosts(count, timeoutSeconds * 1000);
+        const posts = await searchStockPosts(count);
         
         if (posts.length === 0) {
           return {
             content: [{
               type: "text",
-              text: "⏱️ No stock-related posts found in the time window. The Bluesky firehose may be slow, or stock activity is low. Try increasing the timeout or try again later."
+              text: "📭 No stock-related posts found in recent Bluesky activity. Stock discussions may be quiet right now. Try again later."
             }]
           };
         }
@@ -43,8 +42,8 @@ export function registerStockTools(mcp: McpServer) {
         const avgConfidence = analyzed.reduce((sum, p) => sum + p.confidence, 0) / analyzed.length;
         
         const summary = `
-📊 **Stock Sentiment Analysis from Bluesky Firehose**
-${"=".repeat(55)}
+📊 **Stock Sentiment Analysis from Bluesky**
+${"=".repeat(50)}
 
 **Summary:**
 - Total Posts Analyzed: ${analyzed.length}
@@ -55,10 +54,11 @@ ${"=".repeat(55)}
 **Detailed Posts:**
 ${analyzed.map((p, i) => `
 ${i + 1}. **${p.sentiment}** (${(p.confidence * 100).toFixed(1)}% confident)
-   👤 Author: ${p.author}
+   👤 Author: ${p.authorHandle || p.author}
    📝 Text: "${p.text.length > 200 ? p.text.substring(0, 200) + '...' : p.text}"
+   💙 ${p.likeCount || 0} likes | 🔄 ${p.repostCount || 0} reposts
    🕒 Posted: ${new Date(p.createdAt).toLocaleString()}
-   🔗 URI: ${p.uri}
+   🔗 ${p.uri}
 `).join('\n---\n')}
         `.trim();
         
