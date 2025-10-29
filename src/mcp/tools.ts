@@ -2,6 +2,9 @@ import { McpServer } from "mcp-lite";
 import { z } from "zod";
 import { searchStockPosts } from "../lib/bluesky-api";
 import { analyzeSentiment } from "../lib/sentiment";
+import { globalEnv } from "../index";
+import {env} from "cloudflare:workers" 
+
 
 export function registerStockTools(mcp: McpServer) {
   mcp.tool("analyze_stock_posts", {
@@ -28,7 +31,7 @@ export function registerStockTools(mcp: McpServer) {
         
         const analyzed = await Promise.all(
           posts.map(async (post) => {
-            const sentiment = await analyzeSentiment(post.text, ctx.env.AI);
+            const sentiment = await analyzeSentiment(post.text, env.AI);
             return {
               ...post,
               sentiment: sentiment.label,

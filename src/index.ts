@@ -13,6 +13,9 @@ const mcp = new McpServer({
   schemaAdapter: (schema) => z.toJSONSchema(schema as z.ZodType),
 });
 
+// Store env globally so tools can access it
+let globalEnv: Env;
+
 registerStockTools(mcp);
 
 const transport = new StreamableHttpTransport();
@@ -21,9 +24,14 @@ const httpHandler = transport.bind(mcp);
 const app = new Hono<{ Bindings: Env }>();
 
 app.all("/mcp", async (c) => {
+  // Store env so tools can access it
+  globalEnv = c.env;
   const response = await httpHandler(c.req.raw);
   return response;
 });
+
+// Export globalEnv so tools can import it
+export { globalEnv };
 
 app.get("/", (c) => {
   return c.json({
